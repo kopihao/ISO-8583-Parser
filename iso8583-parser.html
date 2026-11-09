@@ -1,0 +1,318 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="pci-dss" content="true">
+    <title>ISO 8583 Parser</title>
+    <link rel="manifest" href="./manifest.json">
+    <link rel="icon" href="./icon.svg" type="image/svg+xml">
+    <script>if('serviceWorker' in navigator) navigator.serviceWorker.register('./sw.js');</script>
+    <style>
+        *, *::before, *::after { box-sizing: border-box; border-width: 0; border-style: solid; border-color: #e5e7eb; }
+        body { margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; background: #000000; }
+        @keyframes modalIn {
+            from { opacity: 0; transform: scale(0.93) translateY(8px); }
+            to   { opacity: 1; transform: scale(1) translateY(0); }
+        }
+    </style>
+    <script src="./version.js"></script>
+    <script src="./iso8583-parser.js"></script>
+</head>
+<body>
+<script>
+    function buildModal({ title, width = 'min(460px,92vw)', bodyHeight = '500px', closeOnBackdrop = true, closeButton = true, borderRadius = '1.25rem', onBuild, onOpen, onClose }) {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);backdrop-filter:blur(4px);display:flex;align-items:center;justify-content:center;z-index:10000;';
+        const modal = document.createElement('div');
+        modal.style.cssText = `background:#ffffff;border-radius:${borderRadius};width:${width};display:flex;flex-direction:column;overflow:hidden;box-shadow:0 24px 60px rgba(0,0,0,0.35);`;
+        const header = document.createElement('div');
+        header.style.cssText = 'display:flex;align-items:center;justify-content:space-between;padding:1rem 1.25rem;border-bottom:1px solid #d1d5db;flex-shrink:0;';
+        header.innerHTML = `<h2 style="color:#1f2937;font-size:0.95rem;font-weight:700;margin:0;letter-spacing:0.01em;">${title}</h2>
+            <div style="display:flex;align-items:center;gap:0.25rem;">
+            <button style="background:none;border:none;color:#9ca3af;font-size:1.35rem;cursor:pointer;line-height:1;padding:0.2rem 0.45rem;border-radius:0.375rem;transition:background 0.15s,color 0.15s;" onmouseover="this.style.background='#f3f4f6';this.style.color='#374151'" onmouseout="this.style.background='none';this.style.color='#9ca3af'">&times;</button>
+            </div>`;
+        const body = document.createElement('div');
+        body.style.cssText = `display:flex;flex-direction:column;gap:0.875rem;padding:1.25rem 1.25rem 1.5rem;height:${bodyHeight};box-sizing:border-box;`;
+        modal.appendChild(header);
+        modal.appendChild(body);
+        overlay.appendChild(modal);
+        document.body.appendChild(overlay);
+        if (onBuild) onBuild(body);
+        const closeBtn = header.querySelector('button');
+        if (!closeButton) closeBtn.style.display = 'none';
+        const close = () => { overlay.style.display = 'none'; if (onClose) onClose(body); };
+        closeBtn.addEventListener('click', close);
+        if (closeOnBackdrop) overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+        return {
+            open() {
+                modal.style.animation = 'modalIn 0.2s cubic-bezier(0.34,1.56,0.64,1) both';
+                overlay.style.display = 'flex';
+                if (onOpen) onOpen(body);
+            },
+            close
+        };
+    }
+
+    const ISO_HINT = '<div style="text-align:center;padding:2rem;color:#9ca3af;"><div style="font-size:1.5rem;margin-bottom:0.5rem;">🏦</div><div style="font-weight:600;margin-bottom:0.25rem;">Paste an ISO 8583 hex message, select profile</div><div style="font-size:0.75rem;">Press Parse or Ctrl+Enter</div></div>';
+
+    let _isoModal = null;
+    function summonISO8583Parser() {
+        if (!_isoModal) {
+            _isoModal = buildModal({
+                title: 'ISO 8583 Parser',
+                width: '100vw',
+                borderRadius: '0',
+                bodyHeight: 'calc(100vh - 56px)',
+                closeOnBackdrop: false,
+                closeButton: false,
+                onBuild(body) {
+                    body.style.gap = '0.75rem';
+                    const profiles = (typeof ISO8583_PROFILES !== 'undefined')
+                        ? ISO8583_PROFILES.map(p => ({ key: p.key, label: p.label }))
+                        : [];
+                    const profileToggleHtml = profiles.map((p, i) =>
+                        `<label style="cursor:pointer;"><input type="radio" name="iso-profile" value="${i}" ${i===0?'checked':''} style="display:none;">
+                        <span class="iso-prof-opt" style="display:block;padding:0.3rem 0.9rem;font-size:0.78rem;font-weight:500;border-radius:9999px;transition:background 0.15s,color 0.15s;">${p.label}</span></label>`
+                    ).join('');
+                    body.innerHTML = `
+                        <div style="display:${profiles.length > 1 ? 'flex' : 'none'};align-items:center;justify-content:space-between;flex-shrink:0;">
+                            <span style="font-size:0.75rem;font-weight:600;color:#6b7280;letter-spacing:0.06em;text-transform:uppercase;padding-left:0.25rem;">Profile</span>
+                            <div style="display:flex;background:#1e293b;border-radius:9999px;padding:3px;gap:2px;">${profileToggleHtml}</div>
+                        </div>
+                        <textarea id="iso-input" placeholder="Paste ISO 8583 hex message…" spellcheck="false"
+                            style="background:#f3f4f6;border:1.5px solid #d1d5db;border-radius:0.625rem;padding:0.6rem 0.875rem;
+                            color:#1f2937;font-size:0.82rem;font-family:monospace;outline:none;width:100%;box-sizing:border-box;
+                            resize:none;height:72px;transition:border-color 0.15s;flex-shrink:0;"
+                            onfocus="this.style.borderColor='#6366f1'" onblur="this.style.borderColor='#d1d5db'"></textarea>
+                        <div id="iso-bytecount" style="font-size:0.75rem;font-weight:600;color:#6b7280;letter-spacing:0.06em;text-transform:uppercase;text-align:left;margin-top:-0.5rem;flex-shrink:0;padding-left:0.25rem;"></div>
+                        <div style="display:none;gap:0.5rem;flex-shrink:0;">
+                            <button id="iso-parse-btn" style="flex:1;background:#6366f1;color:#fff;border:none;border-radius:0.5rem;
+                                padding:0.5rem 1rem;font-size:0.85rem;font-weight:600;cursor:pointer;transition:background 0.15s;"
+                                onmouseover="this.style.background='#4f46e5'" onmouseout="this.style.background='#6366f1'">Parse</button>
+                            <button id="iso-clear-btn" style="background:#f3f4f6;color:#6b7280;border:1.5px solid #d1d5db;border-radius:0.5rem;
+                                padding:0.5rem 0.875rem;font-size:0.85rem;cursor:pointer;transition:background 0.15s;"
+                                onmouseover="this.style.background='#e5e7eb'" onmouseout="this.style.background='#f3f4f6'">Clear</button>
+                        </div>
+                        <div id="iso-result" style="flex:1;min-height:0;overflow-y:auto;border-radius:0.625rem;
+                            border:1.5px solid #d1d5db;background:#fafafa;padding:0.75rem;font-size:0.8rem;
+                            font-family:monospace;color:#374151;">${ISO_HINT}</div>`;
+
+                    const input     = body.querySelector('#iso-input');
+                    const bytecount = body.querySelector('#iso-bytecount');
+                    const result    = body.querySelector('#iso-result');
+
+                    function updateByteCount() {
+                        const nibs = (input.value.match(/[0-9A-Fa-f]/g) || []).length;
+                        if (!nibs) { bytecount.innerHTML = ''; return; }
+                        const odd = nibs % 2 !== 0;
+                        const byteCount = Math.floor(nibs / 2);
+                        const byteLabel = byteCount === 1 ? 'byte' : 'bytes';
+                        const detail = odd ? ` <span style="color:#ef4444;">🔴 odd nibble</span>` : ` (${byteCount} ${byteLabel})`;
+                        bytecount.innerHTML = `ISO Message : ${nibs} nibbles${detail}`;
+                    }
+
+                    const radios = body.querySelectorAll('input[name="iso-profile"]');
+                    const spans  = body.querySelectorAll('.iso-prof-opt');
+
+                    function updateProfileStyle() {
+                        radios.forEach((r, i) => {
+                            spans[i].style.background = r.checked ? '#6366f1' : 'transparent';
+                            spans[i].style.color      = r.checked ? '#ffffff' : '#94a3b8';
+                        });
+                    }
+
+                    function getProfileKey() {
+                        const checked = [...radios].find(r => r.checked);
+                        const idx = checked ? parseInt(checked.value) : 0;
+                        return profiles[idx]?.key ?? profiles[0].key;
+                    }
+
+                    const SVG_EYE_OPEN   = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>`;
+                    const SVG_EYE_CLOSED = `<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94"/><path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19"/><line x1="1" y1="1" x2="23" y2="23"/></svg>`;
+                    let pciVisible = false;
+
+                    function runParse() {
+                        const raw = input.value.trim();
+                        if (!raw) { result.innerHTML = '<div style="color:#ef4444;padding:0.5rem;">⚠️ No input provided.</div>'; return; }
+                        const pciDss = document.querySelector('meta[name="pci-dss"]')?.content !== 'false';
+                        const { profileLabel, mti, mtiLabel, bitmapHex, tpduHex, fields, errors } = parseISO8583ByProfile(raw, getProfileKey(), pciDss);
+                        console.log(`[ISO8583] Profile: ${profileLabel}`);
+                        let html = '';
+
+                        if (tpduHex) {
+                            const nii = tpduHex.slice(2, 6);
+                            html += `<div style="margin-bottom:0.5rem;padding:0.5rem 0.75rem;background:#f1f5f9;border-radius:0.5rem;border-left:3px solid #94a3b8;display:flex;flex-wrap:wrap;gap:0.5rem 1.5rem;font-size:0.78rem;">`;
+                            html += `<span style="font-size:0.65rem;font-weight:700;color:#94a3b8;letter-spacing:0.08em;text-transform:uppercase;width:100%;margin-bottom:0.1rem;">Transport</span>`;
+                            html += `<span><span style="font-weight:700;color:#64748b;">TPDU</span> <span style="color:#1f2937;">${tpduHex}</span></span>`;
+                            html += `<span><span style="font-weight:700;color:#64748b;">NII</span> <span style="color:#1f2937;">${nii}</span></span>`;
+                            html += `</div>`;
+                        }
+
+                        if (mti) {
+                            const primaryHex = bitmapHex.slice(0, 16);
+                            const secondaryHex = bitmapHex.length > 16 ? bitmapHex.slice(16, 32) : null;
+                            const isMtiInvalid = mtiLabel === 'Unknown';
+                            const isBitmapCorrupt = errors.some(e => e.startsWith('primary bitmap corrupt'));
+                            const isSecondaryCorrupt = errors.some(e => e.startsWith('secondary bitmap corrupt'));
+                            let errBlock = '';
+                            if (isMtiInvalid) {
+                                errBlock = `<div style="width:100%;margin-top:0.35rem;font-size:0.75rem;color:#b91c1c;font-weight:700;">🔴 invalid MTI, parsing aborted</div>`;
+                            } else if (isBitmapCorrupt) {
+                                errBlock = `<div style="width:100%;margin-top:0.35rem;font-size:0.75rem;color:#b91c1c;font-weight:700;">🔴 primary bitmap corrupted, parsing aborted</div>`;
+                            } else {
+                                const displayErrors = errors.filter(e => !e.startsWith('secondary bitmap corrupt'));
+                                const secWarn = isSecondaryCorrupt ? `<div style="font-weight:700;">🔴 secondary bitmap corrupted, DE65–DE128 skipped</div>` : '';
+                                if (displayErrors.length === 1 && !isSecondaryCorrupt) {
+                                    errBlock = `<div style="width:100%;margin-top:0.35rem;font-size:0.75rem;color:#b91c1c;">🔴 ${displayErrors[0]}</div>`;
+                                } else if (displayErrors.length > 0 || isSecondaryCorrupt) {
+                                    const errLines = displayErrors.map(e => `<div>🔴 ${e}</div>`).join('');
+                                    const inner = secWarn + errLines;
+                                    const count = displayErrors.length + (isSecondaryCorrupt ? 1 : 0);
+                                    errBlock = count === 1
+                                        ? `<div style="width:100%;margin-top:0.35rem;font-size:0.75rem;color:#b91c1c;">${inner}</div>`
+                                        : `<div style="width:100%;margin-top:0.35rem;"><details style="font-size:0.75rem;color:#b91c1c;"><summary style="cursor:pointer;font-weight:600;">${count} errors</summary>${inner}</details></div>`;
+                                }
+                            }
+
+                            html += `<div style="margin-bottom:0.75rem;padding:0.5rem 0.75rem;background:#ede9fe;border-radius:0.5rem;border-left:3px solid #6366f1;display:flex;flex-wrap:wrap;gap:0.25rem 1.5rem;font-size:0.78rem;">`;
+                            html += `<span style="font-size:0.65rem;font-weight:700;color:#6366f1;letter-spacing:0.08em;text-transform:uppercase;width:100%;margin-bottom:0.1rem;">${profileLabel} Message Header</span>`;
+                            const mtiNames = (typeof CUSTOM_MTI !== 'undefined') ? (CUSTOM_MTI[getProfileKey()]?.[mti] ?? null) : null;
+                            if (mtiNames) {
+                                const mtiTreeLines = mtiNames.map((n, i) => {
+                                    const prefix = i === mtiNames.length - 1 ? '&nbsp;&nbsp;└&nbsp;' : '&nbsp;&nbsp;├&nbsp;';
+                                    return `<div style="font-size:0.75rem;color:#374151;font-family:monospace;padding-left:0.25rem;">${prefix}${n}</div>`;
+                                }).join('');
+                                html += `<div style="width:100%;">`;
+                                html += `<div id="iso-mti-toggle" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;user-select:none;" onclick="(function(el){const exp=el.closest('[id=iso-mti-toggle]').nextElementSibling;const chev=el.closest('[id=iso-mti-toggle]').querySelector('.mti-chev');const open=exp.style.display==='none';exp.style.display=open?'block':'none';chev.style.transform=open?'rotate(90deg)':'rotate(0deg)';})(this)">`;
+                                html += `<span class="mti-chev" style="font-size:0.65rem;color:#4f46e5;transition:transform 0.15s;display:inline-block;">&#9654;</span>`;
+                                html += `<span style="font-weight:700;color:#4f46e5;">MTI</span>`;
+                                html += `<span style="color:#1f2937;">${mti} &mdash; ${mtiLabel}</span>`;
+                                html += `</div>`;
+                                html += `<div style="display:none;margin-top:0.25rem;">${mtiTreeLines}</div>`;
+                                html += `</div>`;
+                            } else {
+                                html += `<span><span style="font-weight:700;color:#4f46e5;">MTI</span> <span style="color:#1f2937;">${mti} &mdash; ${mtiLabel}</span></span>`;
+                            }
+                            html += `<div style="width:100%;">`;
+                            html += `<div id="iso-bm1-toggle" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;user-select:none;" onclick="(function(el){
+                                const exp = el.closest('[id=iso-bm1-toggle]').nextElementSibling;
+                                const chev = el.closest('[id=iso-bm1-toggle]').querySelector('.bm-chev');
+                                const open = exp.style.display === 'none';
+                                exp.style.display = open ? 'block' : 'none';
+                                chev.style.transform = open ? 'rotate(90deg)' : 'rotate(0deg)';
+                            })(this)">`;
+                            html += `<span class="bm-chev" style="font-size:0.65rem;color:#4f46e5;transition:transform 0.15s;display:inline-block;">&#9654;</span>`;
+                            html += `<span style="font-weight:700;color:#4f46e5;">Primary Bitmap</span>`;
+                            html += `<span style="color:#1f2937;font-family:monospace;letter-spacing:0.05em;">${primaryHex}</span>`;
+                            html += `</div>`;
+                            html += `<div style="display:none;margin-top:0.4rem;overflow-x:auto;">`;
+                            html += `<table style="border-collapse:collapse;font-size:0.72rem;font-family:monospace;">`;
+                            const bm1bytes = primaryHex.match(/../g) || [];
+                            html += `<tr>${bm1bytes.map((_,i) => `<td style="padding:0.15rem 0.4rem;color:#64748b;font-weight:600;white-space:nowrap;">Byte ${i+1}</td>`).join('')}</tr>`;
+                            html += `<tr>${bm1bytes.map(b => `<td style="padding:0.15rem 0.4rem;color:#1f2937;letter-spacing:0.08em;">${/^[0-9A-Fa-f]{2}$/.test(b)?parseInt(b,16).toString(2).padStart(8,'0'):'????????'}</td>`).join('')}</tr>`;
+                            html += `<tr>${bm1bytes.map((_,i) => `<td style="padding:0.15rem 0.4rem;color:#94a3b8;font-size:0.68rem;">DE${i*8+1}&ndash;${i*8+8}</td>`).join('')}</tr>`;
+                            html += `</table></div></div>`;
+                            if (secondaryHex || isSecondaryCorrupt) {
+                                const bm2hex = secondaryHex || '';
+                                html += `<div style="width:100%;margin-top:0.25rem;">`;
+                                html += `<div id="iso-bm2-toggle" style="display:flex;align-items:center;gap:0.5rem;cursor:pointer;user-select:none;" onclick="(function(el){
+                                    const exp = el.closest('[id=iso-bm2-toggle]').nextElementSibling;
+                                    const chev = el.closest('[id=iso-bm2-toggle]').querySelector('.bm2-chev');
+                                    const open = exp.style.display === 'none';
+                                    exp.style.display = open ? 'block' : 'none';
+                                    chev.style.transform = open ? 'rotate(90deg)' : 'rotate(0deg)';
+                                })(this)">`;
+                                html += `<span class="bm2-chev" style="font-size:0.65rem;color:${isSecondaryCorrupt?'#ef4444':'#4f46e5'};transition:transform 0.15s;display:inline-block;">&#9654;</span>`;
+                                html += `<span style="font-weight:700;color:${isSecondaryCorrupt?'#ef4444':'#4f46e5'};">Secondary Bitmap</span>`;
+                                html += isSecondaryCorrupt
+                                    ? `<span style="color:#ef4444;font-family:monospace;letter-spacing:0.05em;">🔴 corrupted</span>`
+                                    : `<span style="color:#1f2937;font-family:monospace;letter-spacing:0.05em;">${bm2hex}</span>`;
+                                html += `</div>`;
+                                if (!isSecondaryCorrupt) {
+                                    html += `<div style="display:none;margin-top:0.4rem;overflow-x:auto;">`;
+                                    html += `<table style="border-collapse:collapse;font-size:0.72rem;font-family:monospace;">`;
+                                    const bm2bytes = bm2hex.match(/../g) || [];
+                                    html += `<tr>${bm2bytes.map((_,i) => `<td style="padding:0.15rem 0.4rem;color:#64748b;font-weight:600;white-space:nowrap;">Byte ${i+1}</td>`).join('')}</tr>`;
+                                    html += `<tr>${bm2bytes.map(b => `<td style="padding:0.15rem 0.4rem;color:#1f2937;letter-spacing:0.08em;">${/^[0-9A-Fa-f]{2}$/.test(b)?parseInt(b,16).toString(2).padStart(8,'0'):'????????'}</td>`).join('')}</tr>`;
+                                    html += `<tr>${bm2bytes.map((_,i) => `<td style="padding:0.15rem 0.4rem;color:#94a3b8;font-size:0.68rem;">DE${i*8+65}&ndash;${i*8+72}</td>`).join('')}</tr>`;
+                                    html += `</table></div>`;
+                                }
+                                html += `</div>`;
+                            }
+                            html += errBlock;
+                            html += `</div>`;
+                        }
+
+                        if (fields.length) {
+                            html += `<table style="width:100%;border-collapse:collapse;font-size:0.78rem;table-layout:fixed;"><thead><tr style="background:#f3f4f6;">`;
+                            html += `<th style="padding:0.35rem 0.5rem;text-align:left;color:#6b7280;font-weight:600;border-bottom:1px solid #e5e7eb;white-space:nowrap;width:8%;">DE</th>`;
+                            html += `<th style="padding:0.35rem 0.5rem;text-align:left;color:#6b7280;font-weight:600;border-bottom:1px solid #e5e7eb;width:16%;">Field Name</th>`;
+                            html += `<th style="padding:0.35rem 0.5rem;text-align:left;color:#6b7280;font-weight:600;border-bottom:1px solid #e5e7eb;width:36%;">Raw Data</th>`;
+                            html += `<th style="padding:0.35rem 0.5rem;text-align:left;color:#6b7280;font-weight:600;border-bottom:1px solid #e5e7eb;width:40%;"><span style="display:flex;align-items:center;gap:0.8rem;">Representation<button id="iso-reveal-btn" style="background:none;border:none;cursor:pointer;padding:0;color:#9ca3af;display:flex;align-items:center;transform:scale(0.75);transform-origin:left center;" title="Toggle PCI masking">${pciVisible ? SVG_EYE_OPEN : SVG_EYE_CLOSED}</button></span></th>`;
+                            html += `</tr></thead><tbody>`;
+                            fields.forEach((f, i) => {
+                                const bad = !!f.error;
+                                const bg  = bad ? (i % 2 === 0 ? '#fff1f2' : '#ffe4e6') : (i % 2 === 0 ? '#ffffff' : '#f9fafb');
+                                const tip = bad ? ` title="${f.error}"` : '';
+                                html += `<tr style="background:${bg};"${tip}>`;
+                                html += `<td style="padding:0.35rem 0.5rem;color:${bad?'#ef4444':'#6366f1'};font-weight:700;border-bottom:1px solid #f3f4f6;white-space:nowrap;">${bad?'⚠ ':''}DE${f.de}</td>`;
+                                html += `<td style="padding:0.35rem 0.5rem;color:${bad?'#9ca3af':'#374151'};border-bottom:1px solid #f3f4f6;${bad?'text-decoration:line-through;':''}word-break:break-word;">${f.name}</td>`;
+                                html += `<td style="padding:0.35rem 0.5rem;color:${bad?'#ef4444':'#1f2937'};word-break:break-all;border-bottom:1px solid #f3f4f6;">${f.rawData}</td>`;
+                                html += `<td style="padding:0.35rem 0.5rem;color:${bad?'#fca5a5':'#059669'};word-break:break-all;border-bottom:1px solid #f3f4f6;">${f.repData}</td></tr>`;
+                            });
+                            html += `</tbody></table>`;
+                        } else if (!errors.length) {
+                            html += `<div style="color:#6b7280;padding:0.5rem;">No data elements found.</div>`;
+                        }
+
+                        result.innerHTML = html;
+                        const revealToggle = result.querySelector('#iso-reveal-btn');
+                        if (revealToggle) revealToggle.addEventListener('click', () => {
+                            pciVisible = !pciVisible;
+                            document.querySelector('meta[name="pci-dss"]').content = pciVisible ? 'false' : 'true';
+                            document.dispatchEvent(new Event('runISO8583Parser'));
+                        });
+                    }
+
+                    body.querySelector('#iso-parse-btn').addEventListener('click', runParse);
+                    body.querySelector('#iso-clear-btn').addEventListener('click', () => { input.value = ''; result.innerHTML = ISO_HINT; bytecount.innerHTML = ''; });
+                    radios.forEach(r => r.addEventListener('change', () => { updateProfileStyle(); if (input.value.trim()) runParse(); }));
+                    input.addEventListener('input', () => { updateByteCount(); if (input.value.trim()) runParse(); else result.innerHTML = ISO_HINT; });
+                    input.addEventListener('keydown', e => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) runParse(); });
+                    updateProfileStyle();
+                    document.addEventListener('runISO8583Parser', runParse);
+                },
+                onOpen(body) {
+                    body.querySelector('#iso-input').focus();
+                },
+                onClose(body) {
+                    body.querySelector('#iso-input').value = '';
+                    body.querySelector('#iso-result').innerHTML = ISO_HINT;
+                    const radios = body.querySelectorAll('input[name="iso-profile"]');
+                    const spans  = body.querySelectorAll('.iso-prof-opt');
+                    radios.forEach((r, i) => {
+                        r.checked = i === 0;
+                        spans[i].style.background = i === 0 ? '#6366f1' : 'transparent';
+                        spans[i].style.color      = i === 0 ? '#ffffff' : '#94a3b8';
+                    });
+                }
+            });
+        }
+        _isoModal.open();
+    }
+
+    document.addEventListener('DOMContentLoaded', summonISO8583Parser);
+</script>
+<footer style="position:fixed;bottom:0;left:0;right:0;z-index:10001;display:flex;align-items:center;justify-content:center;padding:0.5rem 1rem;background:#f9fafb;border-top:1px solid #e5e7eb;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;">
+  <div style="display:flex;align-items:center;background:rgba(99,102,241,0.15);border-radius:9999px;padding:0.25rem 0.75rem;gap:0.5rem;font-size:0.62rem;">
+    <span style="color:#6366f1;">ISO 8583 Parser</span>
+    <span style="color:rgba(99,102,241,0.35);">|</span>
+    <span id="app-version" style="color:#818cf8;"></span>
+    <span style="color:rgba(99,102,241,0.35);">|</span>
+    <a href="https://www.linkedin.com/in/kopihao/" target="_blank" rel="noopener" style="color:#6366f1;text-decoration:none;transition:color 0.15s;" onmouseover="this.style.color='#4f46e5'" onmouseout="this.style.color='#6366f1'">@kopihao</a>
+  </div>
+</footer>
+<script>document.getElementById('app-version').textContent='v'+APP_VERSION;</script>
+</body>
+</html>

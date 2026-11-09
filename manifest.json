@@ -1,0 +1,12 @@
+{
+  "name": "ISO 8583 Parser",
+  "short_name": "8583",
+  "description": "Parse, validate, and inspect ISO 8583 financial messages offline.",
+  "start_url": "./iso8583-parser.html",
+  "display": "standalone",
+  "background_color": "#000000",
+  "theme_color": "#6366f1",
+  "icons": [
+    { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

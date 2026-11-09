@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 192 192" width="192" height="192">
+  <!-- Envelope body -->
+  <rect x="16" y="48" width="160" height="104" rx="10" ry="10" fill="#1a1a2e"/>
+  <!-- Envelope flap (V shape) -->
+  <polyline points="16,48 96,112 176,48" fill="none" stroke="#4f8ef7" stroke-width="6" stroke-linejoin="round"/>
+  <!-- Envelope sides -->
+  <rect x="16" y="48" width="160" height="104" rx="10" ry="10" fill="none" stroke="#4f8ef7" stroke-width="6"/>
+  <!-- Label badge -->
+  <rect x="44" y="98" width="104" height="36" rx="6" ry="6" fill="#4f8ef7"/>
+  <!-- 8583 text -->
+  <text x="96" y="124" font-family="monospace" font-size="22" font-weight="bold" fill="#ffffff" text-anchor="middle">8583</text>
+</svg>
