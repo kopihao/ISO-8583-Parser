@@ -262,31 +262,48 @@ const ISO8583_PROFILES = (() => {
 // sanitizeHex(rawInput)
 // Strips noise from raw input and returns clean hex ready for parsing.
 //
-// Handles any mix of: plain hex, spaced hex, log-prefixed lines.
-// Each line is split by whitespace. Tokens that are not a valid 2-nibble hex
-// byte (e.g. timestamps, log tags, text labels) are dropped from the front.
-// Lines with no valid hex bytes are skipped entirely.
+// Per line:
+//   1. Split by whitespace, filter empty tokens.
+//   2. If single token — extract hex chars, pair into 2-nibble tokens.
+//      Trailing single nibble is kept as-is for odd detection in step 5.
+//   3. Split sample by whitespace, filter empty tokens.
+//   4. Shift from front while first token is not a valid 2-nibble hex byte.
+//   5. If last token is a single hex nibble — set oddNibble = true.
+//   6. Filter — keep only exact 2-nibble hex tokens.
+//   7. Join with space. Skip lines with no valid tokens.
+// All lines joined with space.
 //
 // Returns:
 // {
 //   hex     : string  — space-separated hex bytes, ready for parseISO8583
 //   nibbles : number  — total hex char count (2 per byte)
 //   bytes   : number  — nibbles / 2, floored
-//   odd     : boolean — true if nibble count is odd (possible truncation)
+//   odd     : boolean — true if a trailing single nibble was detected
 // }
 // ─────────────────────────────────────────────────────────────────────────────
 function sanitizeHex(rawInput) {
+    let oddNibble = false;
     const hex = rawInput
         .split('\n')
         .map(line => {
-            const arr = line.split(/\s+/).filter(s => s.length > 0);
+            let sample = line;
+            const tokens = line.split(/\s+/).filter(s => s.length > 0);
+            if (tokens.length === 1) {
+                const hexChars = tokens[0].match(/[0-9A-Fa-f]/g) || [];
+                const pairs = [];
+                for (let i = 0; i < hexChars.length - 1; i += 2) pairs.push(hexChars[i] + hexChars[i + 1]);
+                if (hexChars.length % 2 !== 0) pairs.push(hexChars[hexChars.length - 1]);
+                sample = pairs.join(' ');
+            }
+            const arr = sample.split(/\s+/).filter(s => s.length > 0);
             while (arr.length && !/^[0-9A-Fa-f]{2}$/.test(arr[0])) arr.shift();
+            if (/^[0-9A-Fa-f]{1}$/.test(arr[arr.length - 1])) oddNibble = true;
             return arr.filter(s => /^[0-9A-Fa-f]{2}$/.test(s)).join(' ');
         })
         .filter(line => line.length > 0)
         .join(' ');
     const nibbles = hex.replace(/\s/g, '').length;
-    const odd = nibbles % 2 !== 0;
+    const odd = oddNibble || nibbles % 2 !== 0;
     return {
         hex,
         nibbles,
