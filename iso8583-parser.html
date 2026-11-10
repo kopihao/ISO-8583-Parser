@@ -103,13 +103,12 @@
                     const result    = body.querySelector('#iso-result');
 
                     function updateByteCount() {
-                        const nibs = (input.value.match(/[0-9A-Fa-f]/g) || []).length;
-                        if (!nibs) { bytecount.innerHTML = ''; return; }
-                        const odd = nibs % 2 !== 0;
-                        const byteCount = Math.floor(nibs / 2);
-                        const byteLabel = byteCount === 1 ? 'byte' : 'bytes';
-                        const detail = odd ? ` <span style="color:#ef4444;">🔴 odd nibble</span>` : ` (${byteCount} ${byteLabel})`;
-                        bytecount.innerHTML = `ISO Message : ${nibs} nibbles${detail}`;
+                        const { hex, nibbles, bytes, odd } = sanitizeHex(input.value);
+                        if (!nibbles) { bytecount.innerHTML = ''; return; }
+                        const byteLabel = bytes === 1 ? 'byte' : 'bytes';
+                        const detail = odd ? ` <span style="color:#ef4444;">🔴 ODD NIBBLE</span>` : ` (${bytes} ${byteLabel})`;
+                        bytecount.innerHTML = `ISO Message : ${nibbles} nibbles${detail}`;
+                        console.log(`[ISO8583] Hex Received : ${hex}`);
                     }
 
                     const radios = body.querySelectorAll('input[name="iso-profile"]');

@@ -259,15 +259,49 @@ const ISO8583_PROFILES = (() => {
 })();
 
 // ─────────────────────────────────────────────────────────────────────────────
+// sanitizeHex(rawInput)
+// Strips noise from raw input and returns clean hex ready for parsing.
+//
+// Handles any mix of: plain hex, spaced hex, log-prefixed lines.
+// Each line is split by whitespace. Tokens that are not a valid 2-nibble hex
+// byte (e.g. timestamps, log tags, text labels) are dropped from the front.
+// Lines with no valid hex bytes are skipped entirely.
+//
+// Returns:
+// {
+//   hex     : string  — space-separated hex bytes, ready for parseISO8583
+//   nibbles : number  — total hex char count (2 per byte)
+//   bytes   : number  — nibbles / 2, floored
+//   odd     : boolean — true if nibble count is odd (possible truncation)
+// }
+// ─────────────────────────────────────────────────────────────────────────────
+function sanitizeHex(rawInput) {
+    const hex = rawInput
+        .split('\n')
+        .map(line => {
+            const arr = line.split(/\s+/).filter(s => s.length > 0);
+            while (arr.length && !/^[0-9A-Fa-f]{2}$/.test(arr[0])) arr.shift();
+            return arr.filter(s => /^[0-9A-Fa-f]{2}$/.test(s)).join(' ');
+        })
+        .filter(line => line.length > 0)
+        .join(' ');
+    const nibbles = hex.replace(/\s/g, '').length;
+    const odd = nibbles % 2 !== 0;
+    return {
+        hex,
+        nibbles,
+        bytes: Math.floor(nibbles / 2),
+        odd,
+    };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // parseISO8583(rawInput, fieldDefs)
 // Accepts any of: plain hex, multiline hex, log-prefixed lines (e.g. "ISO Log XX XX")
 // Returns: { mti, bitmapHex, fields: [{ de, name, value }], errors }
 // ─────────────────────────────────────────────────────────────────────────────
 function parseISO8583(rawInput, fieldDefs) {
-    const stripped = rawInput
-        .split('\n')
-        .map(line => { const sep = line.indexOf(' - '); const s = sep >= 0 ? line.slice(sep + 3) : line; return s.replace(/^(?:[^0-9A-Fa-f]+\s)*/g, ''); })
-        .join(' ');
+    const { hex: stripped, odd } = sanitizeHex(rawInput);
 
     // Replace invalid (non-hex, non-space) chars with '0' to preserve stream alignment.
     // Dropping them would shift all subsequent field offsets causing cascade errors.
@@ -329,7 +363,7 @@ function parseISO8583(rawInput, fieldDefs) {
 
     const errors = [], fields = [];
     if (!allHex.length) { errors.push(`no valid hex data found in input`); return { mti: null, mtiLabel: null, bitmapHex: '', tpduHex: null, fields, errors }; }
-    if (strippedClean.replace(/\s/g, '').length % 2 !== 0) errors.push(`input has odd nibble count — trailing nibble ignored, possible truncation`);
+    if (odd) errors.push(`input has odd nibble count — trailing nibble ignored, possible truncation`);
     let pos = 0;  // nibble position within hex (post-TPDU)
     function readHex(n) {
         if (pos + n > hex.length) return null;
